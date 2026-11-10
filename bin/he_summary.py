@@ -16,18 +16,23 @@ def is_he_label(text):
     return t in {"HE", "HESTAIN", "HANDE"}
 
 
-def margin(row):
+def number(value):
     try:
-        return float(row["angle_e_minus_h"])
-    except ValueError:
+        return float(value)
+    except (TypeError, ValueError):
         return None
+
+
+def closest(row):
+    values = [number(row["angle_h_minus_e"]), number(row["angle_dab_minus_e"])]
+    return min((abs(v) for v in values if v is not None), default=999)
 
 
 def section(title, rows):
     cards = []
     for r in rows:
         src = f"thumbs/{html.escape(r['name'])}.jpg"
-        caption = f"{r['name']}<br>{r['reason']} | label: {r['stain_label'] or 'none'} | h-e margin: {r['angle_e_minus_h'] or 'n/a'}"
+        caption = f"{r['name']}<br>{r['reason']} | label: {r['stain_label'] or 'none'} | h-e: {r['angle_h_minus_e'] or 'n/a'} | dab-e: {r['angle_dab_minus_e'] or 'n/a'}"
         cards.append(f'<figure><img loading="lazy" src="{src}" alt=""><figcaption>{caption}</figcaption></figure>')
     return f"<h2>{html.escape(title)} ({len(rows)})</h2><div class=grid>{''.join(cards)}</div>"
 
@@ -42,12 +47,13 @@ def main(samplesheet, tsv_dir, jpg_dir, out_dir):
             rows.extend(csv.DictReader(f, delimiter="\t"))
     for r in rows:
         r["stain_label"] = labels.get(r["name"], "")
-        try:
-            r["angle_e_minus_h"] = str(round(float(r["angle_h"]) - float(r["angle_e"]), 2))
-        except ValueError:
-            r["angle_e_minus_h"] = ""
+        for key, stain in (("angle_h_minus_e", "angle_h"), ("angle_dab_minus_e", "angle_dab")):
+            try:
+                r[key] = str(round(float(r[stain]) - float(r["angle_e"]), 2))
+            except ValueError:
+                r[key] = ""
 
-    fields = ["name", "is_he", "reason", "stain_label", "angle_e_minus_h", "n_tissue", "n_dark", "n_light",
+    fields = ["name", "is_he", "reason", "stain_label", "angle_h_minus_e", "angle_dab_minus_e", "n_tissue", "n_dark", "n_light",
               "angle_h", "angle_e", "angle_dab", "slide"]
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "he_check_results.tsv"), "w", newline="") as f:
@@ -58,14 +64,14 @@ def main(samplesheet, tsv_dir, jpg_dir, out_dir):
     kept = [r for r in rows if r["is_he"] == "True"]
     rejected = [r for r in rows if r["is_he"] == "False"]
     errors = [r for r in rows if r["is_he"] == "error"]
-    near = [r for r in rows if margin(r) is not None and abs(margin(r)) < NEAR_TIE_DEGREES]
+    near = [r for r in rows if closest(r) < NEAR_TIE_DEGREES]
     labelled = [r for r in rows if is_he_label(r["stain_label"])]
     lines = [
         f"slides: {len(rows)}",
         f"kept as h&e: {len(kept)}",
         f"rejected: {len(rejected)}",
         f"could not read: {len(errors)}",
-        f"near ties to check by eye (h and e within {NEAR_TIE_DEGREES:g} degrees): {len(near)}",
+        f"near ties to check by eye (h or dab within {NEAR_TIE_DEGREES:g} degrees of e): {len(near)}",
         "rejected by reason:",
     ]
     lines += [f"  {k}: {v}" for k, v in collections.Counter(r["reason"] for r in rejected).most_common()]
@@ -85,7 +91,7 @@ def main(samplesheet, tsv_dir, jpg_dir, out_dir):
         shutil.copy(jpg, thumbs)
 
     near_names = {r["name"] for r in near}
-    rejected.sort(key=lambda r: (r["reason"], abs(margin(r)) if margin(r) is not None else 999))
+    rejected.sort(key=lambda r: (r["reason"], closest(r)))
     page = ("<!doctype html><meta charset=utf-8><title>H&amp;E check</title><style>"
             "body{font:14px sans-serif;margin:16px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}"
             "figure{margin:0}img{width:100%;height:auto;border:1px solid #ccc}figcaption{font-size:11px;overflow-wrap:anywhere}</style>"
